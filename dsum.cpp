@@ -7,6 +7,7 @@
  *     + /disk: Physical disk path.
  *     + /out:  Output file.
  *     + /align: Alignment/size of contiguous disk to hash.
+ *     + /hashsz: Size of output hash, in bytes; 1-20 (SHA1)
  *       /bytes: Amount of data to actually process, in bytes.
  *       /iosize: I/O (DMA) transfer size.
  *       /iodepth: I/O queue depth; hw queue depths: SATA=~32; NVMe=~256
@@ -38,6 +39,7 @@
 UINT IO_BLOCK_SZ = 0x10000;
 UINT QUEUE_DEPTH = 256;
 UINT CHUNK_ALIGN = 0;
+UINT HASH_SZ = 0;
 UINT THREAD_COUNT = 0;
 UINT64 DISK_BYTES = 0;
 SIZE_T BLOCK_CHUNKS = 0;
@@ -188,6 +190,7 @@ DWORD WINAPI WorkerEntry(VOID*)
 	DWORD Result;
 	ULARGE_INTEGER Chunk;
 	IRP* pIRP;
+	char Digest[20];
 
 	for(;;)
 	{
@@ -201,14 +204,14 @@ DWORD WINAPI WorkerEntry(VOID*)
 		Chunk.HighPart = pIRP->ov.OffsetHigh;
 		Chunk.QuadPart /= CHUNK_ALIGN;
 
-		BYTE* pHash = pOut + (Chunk.QuadPart * 20);
+		BYTE* pHash = pOut + (Chunk.QuadPart * HASH_SZ);
 		BYTE* pData = (BYTE*) pIRP->pData;
 
 		for(DWORD i = 0; i < BLOCK_CHUNKS; i++)
 		{
-			SHA1((char*) pHash, (const char*) pData, CHUNK_ALIGN);
-
-			pHash += 20;
+			SHA1((char*) Digest, (const char*) pData, CHUNK_ALIGN);
+			memcpy(pHash, Digest, HASH_SZ);
+			pHash += HASH_SZ;
 			pData += CHUNK_ALIGN;
 		}
 
@@ -253,6 +256,18 @@ int Entry()
 	if(!GetArg("/align:", &CHUNK_ALIGN, true))
 	{
 		LOG("Missing /align");
+		return -1;
+	}
+
+	if(!GetArg("/hashsz:", &HASH_SZ, true))
+	{
+		LOG("Missing /hashsz");
+		return -1;
+	}
+
+	if(!HASH_SZ || HASH_SZ > 20)
+	{
+		LOG("Invalid hash size; valid: 1-20");
 		return -1;
 	}
 
@@ -315,7 +330,7 @@ int Entry()
 	BlockCount = DISK_BYTES / IO_BLOCK_SZ;
 	ULARGE_INTEGER ChunkTotal;
 
-	ChunkTotal.QuadPart = (DISK_BYTES / CHUNK_ALIGN) * 20;
+	ChunkTotal.QuadPart = (DISK_BYTES / CHUNK_ALIGN) * HASH_SZ;
 
 	LOG("-------------------------------");
 	LOG("Disk path: '%s'", DiskPath);
